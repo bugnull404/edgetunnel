@@ -10,26 +10,25 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect deployed artifact of edgetunnel
+      - name: Deploy trivial hello worker edt-hello2
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/edgetunnel" \
-            -o deployed.raw
-          ls -la deployed.raw
-          python3 - <<'PY'
-          import re
-          raw = open('deployed.raw','rb').read()
-          parts = re.findall(rb'filename="([^"]+)"', raw)
-          print("PARTS:", [p.decode() for p in parts])
-          body = raw.split(b'\r\n\r\n',1)[1] if b'\r\n\r\n' in raw else raw
-          js = body
-          print("has DIAG-START:", b'DIAG-START' in js)
-          print("count 'export default':", js.count(b'export default'))
-          print("count 'const __inner':", js.count(b'const __inner'))
-          lines = js.split(b'\n')
-          for i,l in enumerate(lines[:20],1):
-              print(i, l[:60])
-          PY
+          set -eu
+          DEST="${RUNNER_TEMP}/hello"; rm -rf "$DEST"; mkdir -p "$DEST"
+          printf 'export default { fetch() { return new Response("HELLO2-OK " + Date.now()); } };\n' > "$DEST/_worker.js"
+          printf 'name = "edt-hello2"\nmain = "_worker.js"\nno_bundle = true\ncompatibility_date = "2025-11-04"\n' > "$DEST/wrangler.toml"
+          npm install --no-fund --no-audit --no-save --prefix "${RUNNER_TEMP}/tools" wrangler@4
+          (cd "$DEST" && "${RUNNER_TEMP}/tools/node_modules/.bin/wrangler" deploy)
+
+      - name: Probe three workers from runner
+        run: |
+          for u in \
+            "https://edt-hello2.yaoyan6632.workers.dev/" \
+            "https://edt-fix-b.yaoyan6632.workers.dev/admin" \
+            "https://edgetunnel.yaoyan6632.workers.dev/admin" ; do
+            echo "=== $u"
+            curl -sS -m 20 -o body.txt -w "http=%{http_code} time=%{time_total}\n" "$u" || echo "curl failed rc=$?"
+            head -c 300 body.txt; echo; echo "---"
+          done
