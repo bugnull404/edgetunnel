@@ -32,16 +32,20 @@ jobs:
 
       # 上游的 wrangler.toml 把 kv_namespaces 注释掉了，这里只改工作副本、不提交，
       # 避免和 Upstream Sync 冲突；每次部署都带上绑定，面板配置才不会丢。
-      - name: Bind KV namespace
+      # no_bundle 必须放在第一个表头之前，所以插到文件开头；上游默认开启打包，而这份
+      # 单文件 _worker.js 的 esbuild 产物在 Cloudflare 生产 workerd 上会在模块加载期
+      # 直接失败（访问任何路径都是 Error 1101），直传源码则正常。
+      - name: Patch working copy
         env:
           KV_ID: ${{ vars.KV_ID }}
         run: |
+          sed -i '1i no_bundle = true' wrangler.toml
           if [ -n "$KV_ID" ]; then
             printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID" >> wrangler.toml
-            tail -4 wrangler.toml
           else
             echo "::warning::仓库变量 KV_ID 未设置，本次部署不含 KV 绑定"
           fi
+          cat wrangler.toml
 
       - name: Deploy
         env:
