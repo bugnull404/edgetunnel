@@ -60,9 +60,9 @@ jobs:
               printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$2"
               if [ "$3" = "var" ]; then printf '\n[vars]\nADMIN = "testpw"\n'; fi
             } > "$D/wrangler.toml"
-            (cd "$D" && "$WR" deploy)
+            (cd "$D" && "$WR" deploy) || echo "deploy rc=$? (ignored)"
             if [ "$3" = "secret" ]; then
-              (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN --name "$1")
+              (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN --name "$1") || echo "secret put rc=$? (ignored)"
             fi
           }
           mk edt-c1 "$KV_REAL" var
