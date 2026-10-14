@@ -25,31 +25,41 @@ jobs:
         with:
           node-version: "24"
 
-      # 仓库无 package.json，wrangler-action 会退回 runner 预装的旧 wrangler 并误报
-      # workers.dev 未注册，所以这里直接显式装 4.x 再部署。
-      - name: Install wrangler
-        run: npm install --no-fund --no-audit --no-save wrangler@4
-
-      # 上游的 wrangler.toml 把 kv_namespaces 注释掉了，这里只改工作副本、不提交，
-      # 避免和 Upstream Sync 冲突；每次部署都带上绑定，面板配置才不会丢。
-      # no_bundle 必须放在第一个表头之前，所以插到文件开头；上游默认开启打包，而这份
-      # 单文件 _worker.js 的 esbuild 产物在 Cloudflare 生产 workerd 上会在模块加载期
-      # 直接失败（访问任何路径都是 Error 1101），直传源码则正常。
-      - name: Patch working copy
+      # 上游的 wrangler.toml 把 kv_namespaces 注释掉了，这里只生成部署用的工作副本、
+      # 不提交回仓库，避免和 Upstream Sync 冲突；每次部署都带上 KV 绑定，面板配置才不会丢。
+      #
+      # no_bundle 是必须的：这份单文件 _worker.js 的 esbuild 打包产物在 Cloudflare 生产
+      # workerd 上会在模块加载期直接失败（任何路径都返回 Error 1101），直传源码才正常。
+      #
+      # 部署目录必须只含 _worker.js 和 wrangler.toml：no_bundle 会把工程目录里所有匹配
+      # 模块规则的文件一起上传（在仓库根目录 `npm install wrangler` 会把
+      # node_modules/blake3-wasm/*.wasm、miniflare/index.html 也塞进产物），多余模块会让
+      # Worker 启动即失败，同样表现为 1101。所以 wrangler 装到 runner 临时目录里。
+      - name: Prepare isolated deploy dir
         env:
           KV_ID: ${{ vars.KV_ID }}
         run: |
-          sed -i '1i no_bundle = true' wrangler.toml
-          if [ -n "$KV_ID" ]; then
-            printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID" >> wrangler.toml
-          else
-            echo "::warning::仓库变量 KV_ID 未设置，本次部署不含 KV 绑定"
-          fi
-          cat wrangler.toml
+          set -eu
+          DEST="${RUNNER_TEMP}/deploy"
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+          cp _worker.js "$DEST/"
+          {
+            echo 'no_bundle = true'
+            grep -v '^no_bundle' wrangler.toml
+            if [ -n "$KV_ID" ]; then
+              printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID"
+            fi
+          } > "$DEST/wrangler.toml"
+          cat "$DEST/wrangler.toml"
+
+      - name: Install wrangler
+        run: npm install --no-save --no-fund --no-audit --prefix "${RUNNER_TEMP}/tools" wrangler@4
 
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           WORKER_NAME: ${{ vars.WORKER_NAME }}
-        run: npx wrangler deploy --name "${WORKER_NAME:-edgetunnel}"
+        run: "${RUNNER_TEMP}/tools/node_modules/.bin/wrangler" deploy --name "${WORKER_NAME:-edgetunnel}"
+        working-directory: ${{ runner.temp }}/deploy
