@@ -6,11 +6,41 @@ on:
 permissions:
   contents: read
 
+env:
+  KV_REAL: 2b5f5080d3744338983afb72a9840f1b
+  KV_PROBE: f576d93ce8304710913a785a78579428
+
 jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Re-put ADMIN secret on edgetunnel and probe
+      - uses: actions/checkout@v4
+
+      - name: Build instrumented 5MB source once
+        run: |
+          set -eu
+          SRC="${RUNNER_TEMP}/big/_worker.js"
+          mkdir -p "${RUNNER_TEMP}/big"
+          sed '18s/^export default {$/const __inner = {/' _worker.js > "$SRC"
+          cat >> "$SRC" <<'WRAPPER'
+          export default {
+            async fetch(request, env, ctx) {
+              try {
+                const r = await __inner.fetch(request, env, ctx);
+                let body = "";
+                try { body = await r.text(); } catch (e) { body = "<unreadable>"; }
+                return new Response("[RAN status=" + r.status + "] " + body.slice(0, 200), {
+                  status: r.status, headers: { "content-type": "text/plain;charset=UTF-8" } });
+              } catch (e) {
+                return new Response("PATCHED-ERROR\n" + String((e && (e.stack || e.message)) || e), {
+                  status: 500, headers: { "content-type": "text/plain;charset=UTF-8" } });
+              }
+            }
+          };
+          WRAPPER
+          wc -c "$SRC"
+
+      - name: Deploy c1/c2/c3 and probe
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -19,15 +49,33 @@ jobs:
           set -eu
           npm install --no-fund --no-audit --no-save --prefix "${RUNNER_TEMP}/tools" wrangler@4
           WR="${RUNNER_TEMP}/tools/node_modules/.bin/wrangler"
-          D="${RUNNER_TEMP}/secput"; rm -rf "$D"; mkdir -p "$D"
-          printf 'export default { fetch() { return new Response("x"); } };\n' > "$D/_worker.js"
-          printf 'name = "edgetunnel"\nmain = "_worker.js"\nno_bundle = true\ncompatibility_date = "2025-11-04"\n' > "$D/wrangler.toml"
-          (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN)
+          mk() { # name kv adminmode
+            D="${RUNNER_TEMP}/$1"; rm -rf "$D"; mkdir -p "$D"
+            cp "${RUNNER_TEMP}/big/_worker.js" "$D/_worker.js"
+            {
+              echo "name = \"$1\""
+              echo 'main = "_worker.js"'
+              echo 'no_bundle = true'
+              echo 'compatibility_date = "2025-11-04"'
+              printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$2"
+              if [ "$3" = "var" ]; then printf '\n[vars]\nADMIN = "testpw"\n'; fi
+            } > "$D/wrangler.toml"
+            (cd "$D" && "$WR" deploy)
+            if [ "$3" = "secret" ]; then
+              (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN --name "$1")
+            fi
+          }
+          mk edt-c1 "$KV_REAL" var
+          mk edt-c2 "$KV_PROBE" secret
+          mk edt-c3 "$KV_REAL" secret
+          sleep 5
           for u in \
-            "https://edgetunnel.yaoyan6632.workers.dev/admin" \
-            "https://edgetunnel.yaoyan6632.workers.dev/" \
-            "https://edgetunnel.yaoyan6632.workers.dev/xyz123" ; do
+            "https://edt-c1.yaoyan6632.workers.dev/admin" \
+            "https://edt-c2.yaoyan6632.workers.dev/admin" \
+            "https://edt-c3.yaoyan6632.workers.dev/admin" \
+            "https://edt-fix-b.yaoyan6632.workers.dev/admin" \
+            "https://edgetunnel.yaoyan6632.workers.dev/admin" ; do
             echo "=== $u"
             curl -sS -m 20 -o body.txt -w "http=%{http_code}\n" "$u" || echo "curl failed rc=$?"
-            head -c 300 body.txt; echo; echo "---"
+            head -c 250 body.txt; echo; echo "---"
           done
