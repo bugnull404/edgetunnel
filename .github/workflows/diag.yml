@@ -10,29 +10,58 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: edgetunnel settings (bindings incl. plain vars)
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: |
-          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/edgetunnel/settings" \
-            | python3 -m json.tool
+      - uses: actions/checkout@v4
 
-      - name: edgetunnel KV keys (names only)
+      # 把带 try/catch 的插桩版直接部署到生产 edgetunnel 上：
+      # 绑定（secret ADMIN + 真 KV）原封不动，异常栈会被当普通文本返回。
+      - name: Build instrumented copy and deploy over edgetunnel
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          KV_ID: ${{ vars.KV_ID }}
         run: |
-          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/2b5f5080d3744338983afb72a9840f1b/keys?per_page=100" \
-            | python3 -m json.tool
+          set -eu
+          DEST="${RUNNER_TEMP}/deploy"
+          rm -rf "$DEST"; mkdir -p "$DEST"
+          sed '18s/^export default {$/const __inner = {/' _worker.js > "$DEST/_worker.js"
+          cat >> "$DEST/_worker.js" <<'WRAPPER'
+          export default {
+            async fetch(request, env, ctx) {
+              const diag = ["DIAG-START",
+                "ADMIN=" + (env.ADMIN === undefined ? "undefined" : (typeof env.ADMIN + ":len" + String(env.ADMIN).length)),
+                "KV=" + (env.KV && typeof env.KV.get === "function" ? "ok" : String(env.KV)),
+                "URLVAR=" + String(env.URL),
+                "REQ=" + request.url].join(" | ");
+              try {
+                const r = await __inner.fetch(request, env, ctx);
+                let body = "";
+                try { body = await r.text(); } catch (e) { body = "<body unreadable: " + e + ">"; }
+                return new Response(diag + "\n[HANDLER-RAN status=" + r.status + "] " + body.slice(0, 400), {
+                  status: r.status,
+                  headers: { "content-type": "text/plain;charset=UTF-8" },
+                });
+              } catch (e) {
+                return new Response(diag + "\nPATCHED-ERROR\n" + String((e && (e.stack || e.message)) || e), {
+                  status: 500,
+                  headers: { "content-type": "text/plain;charset=UTF-8" },
+                });
+              }
+            }
+          };
+          WRAPPER
+          {
+            echo 'no_bundle = true'
+            grep -v '^no_bundle' wrangler.toml
+            if [ -n "$KV_ID" ]; then
+              printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID"
+            fi
+          } > "$DEST/wrangler.toml"
+          tail -20 "$DEST/_worker.js"
 
-      - name: all workers in account
+      - name: Install wrangler
+        run: npm install --no-fund --no-audit --no-save --prefix "${RUNNER_TEMP}/tools" wrangler@4
+
+      - name: Deploy instrumented build to edgetunnel
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: |
-          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts?per_page=50" \
-            | python3 -c "import json,sys; d=json.load(sys.stdin); print([ (x.get('id'),x.get('etag','')[:8]) for x in d.get('result',[]) ])"
+        run: '${RUNNER_TEMP}/tools/node_modules/.bin/wrangler deploy --name edgetunnel'
+        working-directory: ${{ runner.temp }}/deploy
