@@ -10,63 +10,13 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare isolated deploy dir (pristine, no_bundle)
-        env:
-          KV_ID: ${{ vars.KV_ID }}
+      - name: Probe production paths
         run: |
-          set -eu
-          DEST="${RUNNER_TEMP}/deploy"
-          rm -rf "$DEST"; mkdir -p "$DEST"
-          cp _worker.js "$DEST/"
-          {
-            echo 'no_bundle = true'
-            grep -v '^no_bundle' wrangler.toml
-            if [ -n "$KV_ID" ]; then
-              printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID"
-            fi
-          } > "$DEST/wrangler.toml"
-
-      - name: Install wrangler
-        run: npm install --no-fund --no-audit --no-save --prefix "${RUNNER_TEMP}/tools" wrangler@4
-
-      - name: Delete corrupt edgetunnel script via API
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: |
-          curl -sS -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/edgetunnel?force=true" \
-            | python3 -m json.tool
-
-      - name: Redeploy pristine edgetunnel
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: '${RUNNER_TEMP}/tools/node_modules/.bin/wrangler deploy --name edgetunnel || echo "deploy rc=$? (ignored)"'
-        working-directory: ${{ runner.temp }}/deploy
-
-      - name: Re-put ADMIN secret
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-        run: |
-          set -eu
-          D="${RUNNER_TEMP}/secput"; rm -rf "$D"; mkdir -p "$D"
-          printf 'export default { fetch() { return new Response("x"); } };\n' > "$D/_worker.js"
-          printf 'name = "edgetunnel"\nmain = "_worker.js"\nno_bundle = true\ncompatibility_date = "2025-11-04"\n' > "$D/wrangler.toml"
-          (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "${RUNNER_TEMP}/tools/node_modules/.bin/wrangler" secret put ADMIN) || echo "secret put rc=$? (ignored)"
-
-      - name: Probe production
-        run: |
-          sleep 8
           for u in \
             "https://edgetunnel.yaoyan6632.workers.dev/admin" \
-            "https://edgetunnel.yaoyan6632.workers.dev/" \
-            "https://edgetunnel.yaoyan6632.workers.dev/xyz123" ; do
+            "https://edgetunnel.yaoyan6632.workers.dev/login" \
+            "https://edgetunnel.yaoyan6632.workers.dev/" ; do
             echo "=== $u"
-            curl -sS -m 20 -o body.txt -w "http=%{http_code}\n" "$u" || echo "curl failed rc=$?"
+            curl -sS -m 20 -o body.txt -w "http=%{http_code} redirect=%{redirect_url}\n" "$u" || echo "curl failed rc=$?"
             head -c 200 body.txt; echo; echo "---"
           done
