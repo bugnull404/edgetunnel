@@ -6,15 +6,11 @@ on:
 permissions:
   contents: read
 
-env:
-  KV_REAL: 2b5f5080d3744338983afb72a9840f1b
-  KV_PROBE: f576d93ce8304710913a785a78579428
-
 jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Build and deploy binding-isolation workers
+      - name: Re-put ADMIN secret on edgetunnel and probe
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -23,38 +19,15 @@ jobs:
           set -eu
           npm install --no-fund --no-audit --no-save --prefix "${RUNNER_TEMP}/tools" wrangler@4
           WR="${RUNNER_TEMP}/tools/node_modules/.bin/wrangler"
-          mk() { # $1=name $2=kv_id_or_empty $3=var_or_secret_or_empty
-            D="${RUNNER_TEMP}/$1"; rm -rf "$D"; mkdir -p "$D"
-            printf 'export default { fetch() { return new Response("OK-$1 " + Date.now()); } };\n' > "$D/_worker.js"
-            {
-              echo "name = \"$1\""
-              echo 'main = "_worker.js"'
-              echo 'no_bundle = true'
-              echo 'compatibility_date = "2025-11-04"'
-              if [ -n "$2" ]; then printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$2"; fi
-              if [ "$3" = "var" ]; then printf '\n[vars]\nADMIN = "testpw"\n'; fi
-            } > "$D/wrangler.toml"
-            (cd "$D" && "$WR" deploy)
-            if [ "$3" = "secret" ]; then
-              (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN --name "$1")
-            fi
-          }
-          mk edt-w2 "$KV_REAL" var
-          mk edt-w3 "$KV_PROBE" secret
-          mk edt-w4 "$KV_REAL" secret
-          mk edt-w5 "$KV_REAL" ""
-
-      - name: Probe isolation workers
-        run: |
+          D="${RUNNER_TEMP}/secput"; rm -rf "$D"; mkdir -p "$D"
+          printf 'export default { fetch() { return new Response("x"); } };\n' > "$D/_worker.js"
+          printf 'name = "edgetunnel"\nmain = "_worker.js"\nno_bundle = true\ncompatibility_date = "2025-11-04"\n' > "$D/wrangler.toml"
+          (cd "$D" && printf '%s' "$ADMIN_PASSWORD" | "$WR" secret put ADMIN)
           for u in \
-            "https://edt-hello2.yaoyan6632.workers.dev/" \
-            "https://edt-w2.yaoyan6632.workers.dev/" \
-            "https://edt-w3.yaoyan6632.workers.dev/" \
-            "https://edt-w4.yaoyan6632.workers.dev/" \
-            "https://edt-w5.yaoyan6632.workers.dev/" \
-            "https://edt-fix-b.yaoyan6632.workers.dev/admin" \
-            "https://edgetunnel.yaoyan6632.workers.dev/admin" ; do
+            "https://edgetunnel.yaoyan6632.workers.dev/admin" \
+            "https://edgetunnel.yaoyan6632.workers.dev/" \
+            "https://edgetunnel.yaoyan6632.workers.dev/xyz123" ; do
             echo "=== $u"
             curl -sS -m 20 -o body.txt -w "http=%{http_code}\n" "$u" || echo "curl failed rc=$?"
-            head -c 200 body.txt; echo; echo "---"
+            head -c 300 body.txt; echo; echo "---"
           done
