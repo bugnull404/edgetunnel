@@ -61,5 +61,5 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           WORKER_NAME: ${{ vars.WORKER_NAME }}
-        run: "${RUNNER_TEMP}/tools/node_modules/.bin/wrangler" deploy --name "${WORKER_NAME:-edgetunnel}"
+        run: '${RUNNER_TEMP}/tools/node_modules/.bin/wrangler deploy --name "${WORKER_NAME:-edgetunnel}"'
         working-directory: ${{ runner.temp }}/deploy
