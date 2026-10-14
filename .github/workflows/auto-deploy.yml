@@ -30,6 +30,19 @@ jobs:
       - name: Install wrangler
         run: npm install --no-fund --no-audit --no-save wrangler@4
 
+      # 上游的 wrangler.toml 把 kv_namespaces 注释掉了，这里只改工作副本、不提交，
+      # 避免和 Upstream Sync 冲突；每次部署都带上绑定，面板配置才不会丢。
+      - name: Bind KV namespace
+        env:
+          KV_ID: ${{ vars.KV_ID }}
+        run: |
+          if [ -n "$KV_ID" ]; then
+            printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "$KV_ID" >> wrangler.toml
+            tail -4 wrangler.toml
+          else
+            echo "::warning::仓库变量 KV_ID 未设置，本次部署不含 KV 绑定"
+          fi
+
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
