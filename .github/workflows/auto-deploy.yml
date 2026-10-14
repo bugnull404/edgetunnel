@@ -1,0 +1,29 @@
+name: Auto Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 上游 Upstream Sync 每天 00:00 UTC 合并，这里 00:30 部署最新的 main
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-workers
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy --name ${{ vars.WORKER_NAME || 'edgetunnel' }}
