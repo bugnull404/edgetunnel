@@ -4,8 +4,10 @@ permissions:
   contents: write
 
 on:
-  schedule:
-    - cron: "0 0 * * *" # every day
+  # 2026-10-15 起停用每日自动同步：Cloudflare 账号已被封禁，同步上游代码无处可部署。
+  # 需要时手动触发，或把下面两行加回来恢复每日同步：
+  #   schedule:
+  #     - cron: "0 0 * * *" # every day
   workflow_dispatch:
 
 jobs:
