@@ -1,0 +1,43 @@
+name: Diag (temporary, delete after use)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test anycast-IP + SNI routing and WS upgrade
+        run: |
+          for ip in 104.16.0.1 162.159.0.1 8.35.211.1 104.17.121.5; do
+            echo "=== https via $ip (SNI=workers.dev) /admin"
+            curl -sS -m 15 --resolve edgetunnel.yaoyan6632.workers.dev:443:$ip \
+              -o /dev/null -w "http=%{http_code} tls=%{ssl_verify_result}\n" \
+              https://edgetunnel.yaoyan6632.workers.dev/admin || echo "curl failed rc=$?"
+          done
+          python3 - <<'PY'
+          import ssl, socket, base64, os
+          host = "edgetunnel.yaoyan6632.workers.dev"
+          for ip in ["104.16.0.1", "162.159.0.1"]:
+              try:
+                  ctx = ssl.create_default_context()
+                  with socket.create_connection((ip, 443), timeout=10) as raw:
+                      with ctx.wrap_socket(raw, server_hostname=host) as s:
+                          key = base64.b64encode(os.urandom(16)).decode()
+                          req = (
+                              "GET /?ed=2560 HTTP/1.1\r\n"
+                              f"Host: {host}\r\n"
+                              "Upgrade: websocket\r\n"
+                              "Connection: Upgrade\r\n"
+                              f"Sec-WebSocket-Key: {key}\r\n"
+                              "Sec-WebSocket-Version: 13\r\n\r\n"
+                          )
+                          s.sendall(req.encode())
+                          resp = s.recv(4096)
+                          print(ip, "WS-UPGRADE ->", resp.split(b"\r\n")[0])
+              except Exception as e:
+                  print(ip, "WS-UPGRADE FAIL:", type(e).__name__, e)
+          PY
