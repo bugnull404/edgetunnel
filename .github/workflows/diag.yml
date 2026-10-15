@@ -10,48 +10,42 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: End-to-end vless test through the worker
-        env:
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      - name: e2e vless with correct uuid (ip and domain)
         run: |
           set -eu
-          UUID=$(python3 - <<'PY'
-          import hashlib, os
-          pw = os.environ["ADMIN_PASSWORD"]
-          key = "勿动此默认密钥，有需求请自行通过添加变量KEY进行修改"
-          m = hashlib.md5((pw + key).encode()).hexdigest()
-          m2 = hashlib.md5(m.encode()).hexdigest()
-          print(f"{m2[:8]}-{m2[8:12]}-4{m2[13:16]}-8{m2[17:20]}-{m2[20:]}")
-          PY
-          )
-          echo "uuid prefix: ${UUID:0:13}..."
-          echo "=== proxyip dns check"
-          getent hosts sjc.proxyip.cmliussss.net || echo "proxyip DNS NXDOMAIN/FAIL"
-          echo "=== subscription first link"
-          curl -sS -m 15 "https://edgetunnel.yaoyan6632.workers.dev/sub?token=${UUID}" -o sub.txt || true
-          head -c 120 sub.txt; echo
-          python3 -c "import base64; d=open('sub.txt','rb').read();
-          try: print(base64.b64decode(d).decode().splitlines()[0][:220])
-          except Exception: print(d.decode()[:220])" || true
-          echo "=== v2ray core e2e"
+          echo "=== sub first link"
+          curl -sS -m 15 "https://edgetunnel.yaoyan6632.workers.dev/sub?token=a97f97da22b988655fad7a76cb0f83dc" -o sub.txt
+          python3 -c "import base64; d=open('sub.txt','rb').read().strip()
+          try: t=base64.b64decode(d).decode()
+          except Exception: t=d.decode()
+          ls=t.splitlines(); print('lines:', len(ls)); print(ls[0][:260] if ls else 'EMPTY')"
           curl -sSL -o v2ray.zip -m 120 https://github.com/v2fly/v2ray-core/releases/latest/download/v2ray-linux-64.zip
-          unzip -q v2ray.zip -d v2core
-          cat > client.json <<EOF
+          unzip -q -o v2ray.zip -d v2core
+          mkcfg() {
+            cat > client.json <<EOF
           {
-            "log": { "loglevel": "warning" },
+            "log": { "loglevel": "info" },
             "inbounds": [ { "port": 10808, "protocol": "socks", "settings": { "udp": false } } ],
             "outbounds": [ {
               "protocol": "vless",
-              "settings": { "vnext": [ { "address": "104.16.0.1", "port": 443, "users": [ { "id": "$UUID", "encryption": "none" } ] } ] },
+              "settings": { "vnext": [ { "address": "$1", "port": 443, "users": [ { "id": "05d6358c-9db6-4a82-8248-1cb6489e8046", "encryption": "none" } ] } ] },
               "streamSettings": {
                 "network": "ws", "security": "tls",
-                "tlsSettings": { "serverName": "edgetunnel.yaoyan6632.workers.dev", "allowInsecure": false },
+                "tlsSettings": { "serverName": "edgetunnel.yaoyan6632.workers.dev" },
                 "wsSettings": { "path": "/?ed=2560", "headers": { "Host": "edgetunnel.yaoyan6632.workers.dev" } }
               }
             } ]
           }
           EOF
-          ./v2core/v2ray run -c client.json > v2ray.log 2>&1 &
-          sleep 4
-          curl -sS -m 20 -x socks5://127.0.0.1:10808 -o /dev/null -w "google204 via vless: http=%{http_code} time=%{time_total}\n" https://www.google.com/generate_204 || echo "e2e FAILED rc=$?"
-          tail -5 v2ray.log || true
+          }
+          for target in 104.16.0.1 edgetunnel.yaoyan6632.workers.dev; do
+            echo "=== e2e via $target"
+            mkcfg "$target"
+            ./v2core/v2ray run -c client.json > v2ray.log 2>&1 &
+            VPID=$!
+            sleep 3
+            curl -sS -m 20 -x socks5://127.0.0.1:10808 -o /dev/null -w "google204: http=%{http_code} time=%{time_total}\n" https://www.google.com/generate_204 || echo "e2e FAILED rc=$?"
+            kill $VPID 2>/dev/null || true
+            sleep 1
+          done
+          grep -iE "error|failed|rejected" v2ray.log | tail -6 || true
