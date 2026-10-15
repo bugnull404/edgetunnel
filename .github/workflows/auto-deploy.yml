@@ -1,11 +1,12 @@
 name: Auto Deploy to Cloudflare Workers
 
+# 2026-10-15 起停用自动触发：Cloudflare 账号因违反其服务条款 §2.2.1(j)（禁止用其服务
+# 提供 VPN/类似代理）被封禁，所有账号级 API 返回 9109 User was deactivated，wrangler
+# deploy 必然失败。保留 workflow_dispatch 以便账号恢复后手动重跑。
+# 恢复自动部署时把下面两行加回 on: 即可
+#   push: { branches: [main] }
+#   schedule: [{ cron: "30 0 * * *" }]   # 上游 Sync 每天 00:00 UTC 合并，这里 00:30 部署
 on:
-  push:
-    branches: [main]
-  schedule:
-    # 上游 Upstream Sync 每天 00:00 UTC 合并，这里 00:30 部署最新的 main
-    - cron: "30 0 * * *"
   workflow_dispatch:
 
 concurrency:
