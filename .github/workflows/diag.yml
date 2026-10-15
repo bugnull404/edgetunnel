@@ -7,64 +7,31 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect zone for bugnull.fun
+      - name: Probe live worker over public internet (no CF API, no token)
+        run: |
+          for P in /admin /login /; do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+              "https://edgetunnel.yaoyan6632.workers.dev${P}" || echo "curl_failed")
+            echo "GET ${P} -> ${CODE}"
+          done
+          echo "--- headers of /admin ---"
+          curl -sSI --max-time 20 "https://edgetunnel.yaoyan6632.workers.dev/admin" \
+            | grep -iE '^(HTTP|location|server|cf-ray|content-type)' || true
+
+      - name: Probe token validity once (single call, avoid auth-failure lockout)
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          DOMAIN=bugnull.fun
-          API=https://api.cloudflare.com/client/v4
           AUTH="Authorization: Bearer ${CF_API_TOKEN}"
-
-          echo "=== 1. registry-side NS (via Cloudflare DoH) ==="
-          curl -sS "https://cloudflare-dns.com/dns-query?name=${DOMAIN}&type=NS" \
-            -H 'accept: application/dns-json' \
-          | jq -r '"Status=\(.Status)", (.Answer // [] | .[] | "  NS \(.data)")'
-
-          echo
-          echo "=== 2. does the zone already exist in the account? ==="
-          ZONES=$(curl -sS -H "$AUTH" "${API}/zones?name=${DOMAIN}")
-          echo "$ZONES" | jq -r '"success=\(.success) count=\(.result | length)"'
-          echo "$ZONES" | jq -r '.errors[]? | "  ERROR \(.code): \(.message)"'
-
-          ZONE_ID=$(echo "$ZONES" | jq -r '.result[0].id // empty')
-          ZONE_STATUS=$(echo "$ZONES" | jq -r '.result[0].status // empty')
-
-          if [ -z "$ZONE_ID" ]; then
-            echo
-            echo "=== 3. zone absent -> attempting POST /zones ==="
-            CREATED=$(curl -sS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-              --data "{\"name\":\"${DOMAIN}\",\"account\":{\"id\":\"${CF_ACCOUNT_ID}\"},\"type\":\"full\"}" \
-              "${API}/zones")
-            echo "$CREATED" | jq -r '"success=\(.success)"'
-            echo "$CREATED" | jq -r '.errors[]? | "  ERROR \(.code): \(.message)"'
-            ZONE_ID=$(echo "$CREATED" | jq -r '.result.id // empty')
-            ZONE_STATUS=$(echo "$CREATED" | jq -r '.result.status // empty')
-          fi
-
-          echo
-          echo "=== 4. zone summary ==="
-          echo "zone_id=${ZONE_ID:-<none>}"
-          echo "zone_status=${ZONE_STATUS:-<none>}"
-
-          if [ -n "$ZONE_ID" ]; then
-            ZONE=$(curl -sS -H "$AUTH" "${API}/zones/${ZONE_ID}")
-            echo "$ZONE" | jq -r '.result | "  name=\(.name) status=\(.status) plan=\(.plan.name)", "  name_servers:"'
-            echo "$ZONE" | jq -r '.result.name_servers[]? | "    \(.)"'
-
-            echo
-            echo "=== 5. existing workers custom domains ==="
-            curl -sS -H "$AUTH" \
-              "${API}/accounts/${CF_ACCOUNT_ID}/workers/domains?zone_id=${ZONE_ID}" \
-            | jq -c '{success, result, errors}'
-
-            echo
-            echo "=== 6. DNS records in zone ==="
-            curl -sS -H "$AUTH" "${API}/zones/${ZONE_ID}/dns_records?per_page=50" \
-            | jq -r '.result[]? | "  \(.type) \(.name) -> \(.content) proxied=\(.proxied)"'
-          fi
-
-          echo
-          echo "=== 7. token capabilities probe (no secrets printed) ==="
-          curl -sS -H "$AUTH" "${API}/user/tokens/verify" \
+          curl -sS -H "$AUTH" https://api.cloudflare.com/client/v4/user/tokens/verify \
           | jq -c '{status: .result.status, errors}'
+
+      - name: Registry-side NS for bugnull.fun
+        run: |
+          curl -sS "https://cloudflare-dns.com/dns-query?name=bugnull.fun&type=NS" \
+            -H 'accept: application/dns-json' \
+          | jq -c '{Status, Answer}'
+          echo "--- SOA ---"
+          curl -sS "https://cloudflare-dns.com/dns-query?name=bugnull.fun&type=SOA" \
+            -H 'accept: application/dns-json' \
+          | jq -c '{Status, Answer}'
